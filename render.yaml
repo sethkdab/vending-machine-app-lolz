@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: vending-machine-app
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python flask_server.py"
