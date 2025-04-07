@@ -1,0 +1,173 @@
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+
+// === Wi-Fi Credentials ===
+const char* ssid = "Saat_Service";
+const char* password = "service@2024";
+
+// === Flask Server URL ===
+const char* flaskURL = "https://vending-machine-app-lolz.onrender.com";
+
+// === Unique vending ID for this ESP32 ===
+// Change this for each machine (e.g. "v1", "v2", "v3")
+const String vend_id = "v1";
+
+// === Pin Config ===
+const int motorPin1 = 7;
+const int motorPin2 = 6;
+const int switchPin1 = 3;
+const int switchPin2 = 4;
+
+// === Motor States ===
+bool motor1Running = false;
+bool motor2Running = false;
+bool motor1SignalReceived = false;
+bool motor2SignalReceived = false;
+
+unsigned long motor1StartTime = 0;
+unsigned long motor2StartTime = 0;
+const unsigned long stopDelay = 3000;
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(motorPin1, OUTPUT);
+  pinMode(motorPin2, OUTPUT);
+  pinMode(switchPin1, INPUT_PULLDOWN);
+  pinMode(switchPin2, INPUT_PULLDOWN);
+
+  digitalWrite(motorPin1, LOW);
+  digitalWrite(motorPin2, LOW);
+
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.print(".");
+  }
+
+  Serial.println("\n✅ Wi-Fi connected");
+  Serial.println(WiFi.localIP());
+}
+
+void loop() {
+  pollServer();
+  handleMotorLogic();
+  delay(100);
+}
+
+void pollServer() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("❌ Wi-Fi not connected.");
+    return;
+  }
+
+  HTTPClient http;
+  http.setTimeout(5000);
+  String url = String(flaskURL) + "/get_command?vend_id=" + vend_id;
+  http.begin(url);
+
+  int httpCode = http.GET();
+  if (httpCode == 200) {
+    String response = http.getString();
+    Serial.println("📡 Server Response: " + response);
+
+    DynamicJsonDocument doc(256);
+    deserializeJson(doc, response);
+
+    int motor_id = doc["motor_id"];
+    String action = doc["action"];
+
+    if (action == "start") {
+      if (motor_id == 1 && !motor1Running) {
+        motor1SignalReceived = true;
+      }
+      if (motor_id == 2 && !motor2Running) {
+        motor2SignalReceived = true;
+      }
+    }
+
+  } else {
+    Serial.printf("❌ HTTP GET failed. Code: %d\n", httpCode);
+  }
+
+  http.end();
+}
+
+void handleMotorLogic() {
+  int switchState1 = digitalRead(switchPin1);
+  int switchState2 = digitalRead(switchPin2);
+  unsigned long now = millis();
+
+  // ✅ Condition 1: HTTP Signal
+  if (motor1SignalReceived && !motor1Running) {
+    Serial.println("⚙️ Motor 1 started by HTTP.");
+    startMotor(motorPin1, motor1Running, motor1StartTime);
+    motor1SignalReceived = false;
+  }
+  if (motor2SignalReceived && !motor2Running) {
+    Serial.println("⚙️ Motor 2 started by HTTP.");
+    startMotor(motorPin2, motor2Running, motor2StartTime);
+    motor2SignalReceived = false;
+  }
+
+  // ✅ Condition 2: Keep running while switch pressed
+  if (switchState1 == HIGH && !motor1Running) {
+    Serial.println("🔁 Switch 1 HIGH → Motor 1 ON");
+    startMotor(motorPin1, motor1Running, motor1StartTime);
+  }
+  if (switchState2 == HIGH && !motor2Running) {
+    Serial.println("🔁 Switch 2 HIGH → Motor 2 ON");
+    startMotor(motorPin2, motor2Running, motor2StartTime);
+  }
+
+  // ✅ Condition 3: Stop after 3s if switch released
+  if (motor1Running && switchState1 == LOW && (now - motor1StartTime >= stopDelay)) {
+    Serial.println("⏹️ Motor 1 stopped (timeout + switch LOW)");
+    stopMotor(motorPin1, motor1Running);
+    sendAck(1, "success");
+  }
+  if (motor2Running && switchState2 == LOW && (now - motor2StartTime >= stopDelay)) {
+    Serial.println("⏹️ Motor 2 stopped (timeout + switch LOW)");
+    stopMotor(motorPin2, motor2Running);
+    sendAck(2, "success");
+  }
+}
+
+// === Helper Functions ===
+void startMotor(int motorPin, bool &runningFlag, unsigned long &startTime) {
+  digitalWrite(motorPin, HIGH);
+  runningFlag = true;
+  startTime = millis();
+}
+
+void stopMotor(int motorPin, bool &runningFlag) {
+  digitalWrite(motorPin, LOW);
+  runningFlag = false;
+}
+
+void sendAck(int motor_id, String status) {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  HTTPClient http;
+  http.begin(String(flaskURL) + "/acknowledge");
+  http.addHeader("Content-Type", "application/json");
+
+  DynamicJsonDocument doc(256);
+  doc["motor_id"] = motor_id;
+  doc["status"] = status;
+  doc["vend_id"] = vend_id;  // 🆕 Include vending ID in ack
+
+  String body;
+  serializeJson(doc, body);
+
+  int httpCode = http.POST(body);
+  if (httpCode == 200) {
+    Serial.printf("✅ Ack sent for motor %d\n", motor_id);
+  } else {
+    Serial.println("❌ Ack failed.");
+  }
+
+  http.end();
+}

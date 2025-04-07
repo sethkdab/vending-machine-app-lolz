@@ -1,12 +1,17 @@
 # === flask_server.py ===
 from flask import Flask, request, jsonify, render_template
+import threading
+import time
 
 app = Flask(__name__)
 
 # Store latest command per vending machine with delivery tracking
 latest_commands = {
-    # Example: 'v1': {"motor_id": 1, "action": "start", "acknowledged": False}
+    # Example: 'v1': {"motor_id": 1, "action": "start", "acknowledged": False, "timestamp": time.time()}
 }
+
+# Retry interval in seconds
+RETRY_INTERVAL = 10
 
 @app.route('/')
 def index():
@@ -26,7 +31,8 @@ def buy_item():
     latest_commands[vend_id] = {
         "motor_id": int(item_id),
         "action": "start",
-        "acknowledged": False
+        "acknowledged": False,
+        "timestamp": time.time()
     }
     print(f"[buy_item] Command stored for {vend_id}: motor {item_id}")
     return f"\u2705 Command sent to vending machine {vend_id}"
@@ -60,5 +66,22 @@ def acknowledge():
         print(f"[ACK] Unknown vend_id: {vend_id}")
     return "OK", 200
 
+# Background thread to retry unacknowledged commands
+def retry_unacknowledged_commands():
+    while True:
+        time.sleep(RETRY_INTERVAL)
+        current_time = time.time()
+        for vend_id, command in list(latest_commands.items()):
+            if not command.get("acknowledged", True):
+                # Check if the command is stale (e.g., older than 60 seconds)
+                if current_time - command["timestamp"] > 60:
+                    print(f"[Retry] Command for {vend_id} expired and removed.")
+                    del latest_commands[vend_id]
+                else:
+                    print(f"[Retry] Resending command to {vend_id}: motor {command['motor_id']}")
+
+# Start the retry thread
 if __name__ == '__main__':
+    retry_thread = threading.Thread(target=retry_unacknowledged_commands, daemon=True)
+    retry_thread.start()
     app.run(host='0.0.0.0', port=5000)
