@@ -80,6 +80,13 @@ def acknowledge():
         print(f"[ACK] Unknown vend_id: {vend_id}")
     return "OK", 200
 
+@app.route('/waiting')
+def waiting():
+    vend_id = request.args.get('vend_id')
+    if not vend_id:
+        return "\u274c Missing vend_id in URL", 400
+    return render_template('waiting.html', vend_id=vend_id)
+
 # Background thread to retry unacknowledged commands
 def retry_unacknowledged_commands():
     while True:
