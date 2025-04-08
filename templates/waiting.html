@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Waiting for Acknowledgment</title>
+    <style>
+        .spinner {
+            border: 16px solid #f3f3f3;
+            border-top: 16px solid #3498db;
+            border-radius: 50%;
+            width: 120px;
+            height: 120px;
+            animation: spin 2s linear infinite;
+            margin: 50px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .center {
+            text-align: center;
+            margin-top: 50px;
+        }
+    </style>
+</head>
+<body>
+    <div class="center">
+        <div class="spinner"></div>
+        <p>Waiting for acknowledgment...</p>
+    </div>
+
+    <script>
+        const vendId = "{{ vend_id }}";
+
+        function checkAcknowledgment() {
+            fetch(`/check_ack?vend_id=${vendId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.acknowledged) {
+                        window.location.href = `/?vend_id=${vendId}`;
+                    } else {
+                        setTimeout(checkAcknowledgment, 1000); // Retry after 1 second
+                    }
+                });
+        }
+
+        // Start polling for acknowledgment
+        checkAcknowledgment();
+    </script>
+</body>
+</html>
