@@ -4,17 +4,64 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vending Machine</title>
+    <style>
+        .product-item {
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 5px;
+        }
+        .buy-button {
+            padding: 8px 15px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .out-of-stock {
+            color: red;
+            font-weight: bold;
+        }
+    </style>
 </head>
 <body>
     <h1>Welcome to the Vending Machine</h1>
-    <form action="/buy_item" method="POST">
-        <input type="hidden" name="vend_id" value="{{ vend_id }}">
-        <label for="item_id">Select Item:</label>
-        <select name="item_id" id="item_id">
-            <option value="1">Item 1</option>
-            <option value="2">Item 2</option>
-        </select>
-        <button type="submit">Buy Item</button>
-    </form>
+    {% with messages = get_flashed_messages() %}
+        {% if messages %}
+            {% for message in messages %}
+                <div class="alert alert-info">{{ message }}</div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    {% if products %}
+        {% for product in products %}
+            <div class="product-item">
+                <h3>{{ product.name }}</h3>
+                <p>Price: ${{ product.price }}</p>
+                <p>Stock:
+                    {% if product.stock > 0 %}
+                        {{ product.stock }}
+                    {% else %}
+                        <span class="out-of-stock">Out of Stock</span>
+                    {% endif %}
+                </p>
+                {% if product.stock > 0 %}
+                    <form action="/buy_item" method="POST">
+                        <input type="hidden" name="vend_id" value="{{ vend_id }}">
+                        <input type="hidden" name="item_id" value="{{ product.id }}">
+                        <button type="submit" class="buy-button">Buy</button>
+                    </form>
+                {% endif %}
+            </div>
+        {% else %}
+            <p>No products available at the moment.</p>
+        {% endfor %}
+    {% else %}
+        <p>Loading products...</p>
+    {% endif %}
+
+    <p><a href="{{ url_for('list_products') }}">Admin Panel</a></p>
 </body>
 </html>
