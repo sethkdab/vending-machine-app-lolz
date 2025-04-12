@@ -486,7 +486,7 @@ def new_product():
         except Exception as e:
             db.session.rollback()
             flash(f"An error occurred: {str(e)}", 'danger')
-            print(f"[
+            print(f"[ADMIN_DELETE_ERROR] {e}") # <<< Ensure this line is complete!
         return jsonify({"error": "Missing vend_id, command_id, or status"}), 400
 
     command = VendCommand.query.get(command_id)
