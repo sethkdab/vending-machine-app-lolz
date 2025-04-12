@@ -13,7 +13,7 @@ app = Flask(__name__)
 
 # Configure the database URI from Render's environment variable
 # Make sure the DATABASE_URL starts with postgresql:// not postgres://
-db_url = os.environ.get('postgresql://vending_machine_db_4myc_user:wclguWAJXZEY8rUyWmsf7inzxEBjjM5h@dpg-cvsv0nk9c44c73c7bt10-a/vending_machine_db_4myc')
+db_url = os.environ.get('DATABASE_URL')
 if db_url and db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql://", 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
