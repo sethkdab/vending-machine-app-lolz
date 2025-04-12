@@ -12,7 +12,7 @@ app = Flask(__name__)
 # Configure the database URI from Render's environment variable
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.secret_key = os.environ.get('SECRET_KEY', '8f09cb2c58d3b2f012fe5cb6d98626e9') # For flash messages
+app.secret_key = os.environ.get('SECRET_KEY', 'your_secret_key') # Remember to set this in Render!
 
 # Initialize SQLAlchemy
 db = SQLAlchemy(app)
@@ -115,11 +115,25 @@ def get_command():
         })
     else:
         return jsonify({"motor_id": None, "action": None, "command_id": None})
-    
+
 @app.route('/admin/products')
 def list_products():
     products = Product.query.all()
     return render_template('admin/products.html', products=products)
+
+@app.route('/admin/product/new', methods=['GET', 'POST'])
+def new_product():
+    if request.method == 'POST':
+        name = request.form['name']
+        price = float(request.form['price'])
+        stock = int(request.form['stock'])
+        motor_id = int(request.form['motor_id'])  # Ensure your form has this
+        new_product = Product(name=name, price=price, stock=stock, motor_id=motor_id)
+        db.session.add(new_product)
+        db.session.commit()
+        flash(f'Product "{name}" added successfully!', 'success')
+        return redirect(url_for('list_products'))
+    return render_template('admin/new_product.html')
 
 @app.route('/acknowledge', methods=['POST'])
 def acknowledge():
