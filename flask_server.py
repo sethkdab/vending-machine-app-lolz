@@ -115,6 +115,11 @@ def get_command():
         })
     else:
         return jsonify({"motor_id": None, "action": None, "command_id": None})
+    
+@app.route('/admin/products')
+def list_products():
+    products = Product.query.all()
+    return render_template('admin/products.html', products=products)
 
 @app.route('/acknowledge', methods=['POST'])
 def acknowledge():
