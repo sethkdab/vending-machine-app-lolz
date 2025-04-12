@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Vending Machine</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <h1>Available Products</h1>
+    {% with messages = get_flashed_messages() %}
+        {% if messages %}
+            {% for message in messages %}
+                <div class="alert alert-info">{{ message }}</div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+    <ul>
+        {% for product in products %}
+        <li>
+            {{ product.name }} - ${{ product.price }} (Stock: {{ product.stock }})
+            {% if product.stock > 0 %}
+            <form method="GET" action="{{ url_for('select_product', product_id=product.id) }}">
+                <button type="submit">Select</button>
+            </form>
+            {% else %}
+            <span class="out-of-stock">Out of Stock</span>
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+    <p><a href="{{ url_for('list_products') }}">Go to Admin Panel</a></p>
+
+    <style>
+        .out-of-stock {
+            color: red;
+            font-weight: bold;
+        }
+    </style>
+</body>
+</html>
