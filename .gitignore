@@ -1,0 +1,31 @@
+# Environment variables
+.env
+
+# Python virtual environment
+venv/
+.venv/
+env/
+ENV/
+*/venv/
+*/.venv/
+
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local database file (if using SQLite)
+*.db
+*.sqlite
+*.sqlite3
+local_development.db # Or whatever you named yours
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Build artifacts, logs, etc. (add as needed)
+/instance # Flask instance folder if used
+*.log
