@@ -1,5 +1,5 @@
 # === flask_server.py ===
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, redirect, url_for
 import threading
 import time
 
@@ -12,6 +12,7 @@ latest_commands = {
 
 # Retry interval in seconds
 RETRY_INTERVAL = 10
+ACK_TIMEOUT = 60  # Timeout in seconds for waiting for acknowledgment
 
 @app.route('/')
 def index():
@@ -28,6 +29,7 @@ def buy_item():
     if not vend_id or not item_id:
         return "\u274c Missing vend_id or item_id", 400
 
+    # Store the command
     latest_commands[vend_id] = {
         "motor_id": int(item_id),
         "action": "start",
@@ -35,7 +37,19 @@ def buy_item():
         "timestamp": time.time()
     }
     print(f"[buy_item] Command stored for {vend_id}: motor {item_id}")
-    return f"\u2705 Command sent to vending machine {vend_id}"
+
+    # Wait for acknowledgment
+    start_time = time.time()
+    while time.time() - start_time < ACK_TIMEOUT:
+        command = latest_commands.get(vend_id)
+        if command and command.get("acknowledged", False):
+            print(f"[buy_item] Acknowledgment received for {vend_id}.")
+            return redirect(url_for('index', vend_id=vend_id))
+        time.sleep(1)  # Check every second
+
+    # If acknowledgment is not received within the timeout
+    print(f"[buy_item] Acknowledgment timeout for {vend_id}.")
+    return "\u274c Acknowledgment not received in time.", 408
 
 @app.route('/get_command', methods=['GET'])
 def get_command():
