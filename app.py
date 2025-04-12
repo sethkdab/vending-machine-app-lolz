@@ -47,7 +47,7 @@ migrate = Migrate(app, db)
 
 # --- Database Models ---
 # Using not set. Using a default insecure key.")
-    secret_key = 'default-insecure-secret-key-CHANGE-ME-IN-RENDER'
+    secret_key = 'your_actual_secret_key_here'
 app.secret_key = secret_key
 
 # --- Database Setup (Only ONCE) ---
