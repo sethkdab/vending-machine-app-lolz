@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Dashboard{% endblock %}
+
+{% block content %}
+<h2>Admin Dashboard</h2>
+<hr>
+
+<div class="row">
+    <div class="col-md-4">
+        <div class="card text-white bg-primary mb-3">
+            <div class="card-header">Products</div>
+            <div class="card-body">
+                <h5 class="card-title">{{ product_count }}</h5>
+                <p class="card-text">Total products managed.</p>
+                <a href="{{ url_for('list_products') }}" class="btn btn-outline-light">Manage Products</a>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card text-white bg-warning mb-3">
+            <div class="card-header">Pending Commands</div>
+            <div class="card-body">
+                <h5 class="card-title">{{ pending_commands }}</h5>
+                <p class="card-text">Commands waiting for machine acknowledgment.</p>
+                {# Optional: Link to a command view page #}
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card text-white bg-danger mb-3">
+            <div class="card-header">Failed Commands</div>
+            <div class="card-body">
+                <h5 class="card-title">{{ failed_commands }}</h5>
+                <p class="card-text">Commands that failed during vending.</p>
+                 {# Optional: Link to a command view page #}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}

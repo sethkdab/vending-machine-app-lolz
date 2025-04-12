@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}Admin - {{ action }} Product{% endblock %}
+
+{% block content %}
+<h2>{{ action }} Product</h2>
+<hr>
+
+{# Determine form action URL based on whether we are adding or editing #}
+{% if action == "Edit" %}
+<form method="POST" action="{{ url_for('edit_product', product_id=product.id) }}">
+{% else %}
+<form method="POST" action="{{ url_for('add_product') }}">
+{% endif %}
+
+  <div class="mb-3">
+    <label for="name" class="form-label">Product Name</label>
+    <input type="text" class="form-control" id="name" name="name" value="{{ product.name if product else '' }}" required>
+  </div>
+  <div class="mb-3">
+    <label for="price" class="form-label">Price (£)</label>
+    <input type="number" step="0.01" min="0.01" class="form-control" id="price" name="price" value="{{ product.price if product else '' }}" required>
+  </div>
+  <div class="mb-3">
+    <label for="stock" class="form-label">Stock Quantity</label>
+    <input type="number" min="0" class="form-control" id="stock" name="stock" value="{{ product.stock if product else '0' }}" required>
+  </div>
+   <div class="mb-3">
+    <label for="motor_id" class="form-label">Motor ID (Unique)</label>
+    <input type="number" min="1" class="form-control" id="motor_id" name="motor_id" value="{{ product.motor_id if product else '' }}" required>
+  </div>
+   <div class="mb-3">
+    <label for="image_url" class="form-label">Image URL (Optional)</label>
+    <input type="url" class="form-control" id="image_url" name="image_url" value="{{ product.image_url if product and product.image_url else '' }}">
+     <small class="form-text text-muted">Enter the full web address (URL) of an image for the product.</small>
+  </div>
+
+  <button type="submit" class="btn btn-primary">Save Product</button>
+  <a href="{{ url_for('list_products') }}" class="btn btn-secondary">Cancel</a>
+</form>
+
+{% endblock %}
