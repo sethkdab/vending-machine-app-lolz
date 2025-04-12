@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block title %}Confirm Purchase - {{ product.name }}{% endblock %}
+
+{% block content %}
+<h2>Confirm Purchase</h2>
+<hr>
+
+<div class="card w-50 mx-auto">
+    <div class="card-body">
+        <h5 class="card-title">{{ product.name }}</h5>
+        <p class="card-text">Price: <strong>£{{ "%.2f"|format(product.price) }}</strong></p>
+        {% if product.description %}
+            <p class="card-text"><small>{{ product.description }}</small></p>
+        {% endif %}
+
+        {% if product.stock > 0 %}
+            <p>Stock available: {{ product.stock }}</p>
+            {# --- Payment Form --- #}
+            <form action="{{ url_for('process_payment', product_id=product.id) }}" method="POST">
+                {# Placeholder for actual payment fields if needed #}
+                <p>Click below to simulate payment and dispense.</p>
+                <button type="submit" class="btn btn-success w-100">Pay £{{ "%.2f"|format(product.price) }}</button>
+            </form>
+            {# --- End Payment Form --- #}
+        {% else %}
+             <div class="alert alert-danger">Sorry, this item just went out of stock.</div>
+        {% endif %}
+         <a href="{{ url_for('vending_machine') }}" class="btn btn-secondary w-100 mt-2">Cancel</a>
+    </div>
+</div>
+
+{% endblock %}
