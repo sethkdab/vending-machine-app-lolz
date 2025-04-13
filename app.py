@@ -433,12 +433,8 @@ def add_product():
 
 @app.route('/admin/vending/<vend_id>', methods=['GET', 'POST'])
 def manage_vending(vend_id):
-    if request.method == 'POST':
-        # Handle adding or editing items
-        pass
-
     # Fetch all products for the vending machine
-    products = Product.query.filter_by(vend_id=vend_id).all()
+    products = Product.query.filter_by(motor_id=vend_id).all()
     return render_template('admin/manage_vending.html', vend_id=vend_id, products=products)
 
 @app.route('/vending/<vend_id>')
