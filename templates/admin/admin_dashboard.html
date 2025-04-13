@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Dashboard{% endblock %}
+
+{% block content %}
+<h2>Admin Dashboard</h2>
+<hr>
+<ul>
+  {% for vend_id in vending_ids %}
+  <li>
+    Vending Machine ID: {{ vend_id }}
+    <a href="{{ url_for('manage_vending', vend_id=vend_id) }}" class="btn btn-primary btn-sm">Manage</a>
+  </li>
+  {% endfor %}
+</ul>
+{% endblock %}

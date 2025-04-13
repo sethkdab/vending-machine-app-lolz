@@ -120,54 +120,14 @@ def browse_products():
 
 @app.route('/buy/<int:product_id>', methods=['POST'])
 def buy_item(product_id):
-    vend_id = request.form.get('vend_id')
-
-    if not vend_id:
-        flash("Vending machine ID is missing.", "error")
-        return redirect(url_for('browse_products')) # Redirect to browse if no ID
-
-    # Use get_or_404 for cleaner product not found handling
     product = Product.query.get_or_404(product_id)
-
-    redirect_url = url_for('index', vend_id=vend_id) # URL to redirect back to
-
-    if product.stock <= 0:
-        flash(f"'{product.name}' is out of stock.", "warning")
-        return redirect(redirect_url)
-
-    # Check for existing pending commands for THIS machine
-    try:
-        existing_command = VendCommand.query.filter_by(
-            vend_id=vend_id,
-            status='pending'
-        ).first()
-
-        if existing_command:
-            flash("Another purchase is already in progress for this machine. Please wait.", "warning")
-            return redirect(redirect_url)
-
-        # --- Create Command and Optimistic Update ---
-        new_command = VendCommand(
-            vend_id=vend_id,
-            product_id=product.id,
-            motor_id=product.motor_id,
-            status='pending'
-        )
-        db.session.add(new_command)
-
-        product.stock -= 1 # Decrement stock
-
-        db.session.commit() # Commit both changes
-
-        flash(f"Purchase initiated for '{product.name}'. Please wait for the item.", "info")
-        print(f"[BUY] Initiated command {new_command.id} for {vend_id}, motor {product.motor_id}. Stock reduced to {product.stock}.")
-
-    except Exception as e:
-        db.session.rollback() # Rollback changes if anything failed
-        flash("An error occurred while initiating the purchase. Please try again.", "error")
-        print(f"[ERROR] Failed to initiate purchase for product {product_id} on {vend_id}: {e}")
-
-    return redirect(redirect_url)
+    if product.stock > 0:
+        product.stock -= 1
+        db.session.commit()
+        flash(f"You bought {product.name} for £{product.price}!", "success")
+    else:
+        flash(f"{product.name} is out of stock!", "danger")
+    return redirect(request.referrer or url_for('buyer_interface', vend_id=product.vend_id))
 
 
 # --- Vending Machine Client Routes ---
@@ -276,21 +236,9 @@ def acknowledge():
 
 @app.route('/admin')
 def admin_dashboard():
-    # Simple dashboard page using command counts
-    try:
-        product_count = Product.query.count()
-        pending_commands = VendCommand.query.filter_by(status='pending').count()
-        failed_commands = VendCommand.query.filter_by(status='acknowledged_failure').count()
-    except Exception as e:
-        print(f"Database error fetching dashboard data: {e}")
-        flash("Error fetching dashboard data.", "error")
-        product_count, pending_commands, failed_commands = 0, 0, 0
-
-    # Assumes you have 'admin/dashboard.html' template
-    return render_template('admin/dashboard.html',
-                           product_count=product_count,
-                           pending_commands=pending_commands,
-                           failed_commands=failed_commands)
+    # Fetch all unique vending machine IDs
+    vending_ids = db.session.query(VendCommand.vend_id).distinct().all()
+    return render_template('admin/dashboard.html', vending_ids=[v[0] for v in vending_ids])
 
 @app.route('/admin/products')
 def list_products():
@@ -483,6 +431,21 @@ def add_product():
     # Render the form for GET requests
     return render_template('admin/product_form.html', action="Add New", product=None)
 
+@app.route('/admin/vending/<vend_id>', methods=['GET', 'POST'])
+def manage_vending(vend_id):
+    if request.method == 'POST':
+        # Handle adding or editing items
+        pass
+
+    # Fetch all products for the vending machine
+    products = Product.query.filter_by(vend_id=vend_id).all()
+    return render_template('admin/manage_vending.html', vend_id=vend_id, products=products)
+
+@app.route('/vending/<vend_id>')
+def buyer_interface(vend_id):
+    # Fetch all products for the vending machine
+    products = Product.query.filter_by(vend_id=vend_id).all()
+    return render_template('buyer_interface.html', vend_id=vend_id, products=products)
 
 # --- Main Execution Block ---
 if __name__ == '__main__':

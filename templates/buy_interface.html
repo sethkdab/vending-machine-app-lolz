@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block title %}Vending Machine {{ vend_id }}{% endblock %}
+
+{% block content %}
+<h2>Vending Machine: {{ vend_id }}</h2>
+<hr>
+<table class="table">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Price</th>
+      <th>Stock</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for product in products %}
+    <tr>
+      <td>{{ product.name }}</td>
+      <td>{{ product.price }}</td>
+      <td>{{ product.stock }}</td>
+      <td>
+        {% if product.stock > 0 %}
+        <form action="{{ url_for('buy_item', product_id=product.id) }}" method="POST">
+          <button type="submit" class="btn btn-primary btn-sm">Buy</button>
+        </form>
+        {% else %}
+        <span class="text-danger">Out of Stock</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
