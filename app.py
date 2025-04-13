@@ -435,6 +435,55 @@ def delete_product(id):
     return redirect(url_for('list_products'))
 
 
+@app.route('/admin/product/add', methods=['GET', 'POST'])
+def add_product():
+    if request.method == 'POST':
+        try:
+            # Get form data
+            name = request.form['name']
+            price = float(request.form['price'])
+            stock = int(request.form['stock'])
+            motor_id = int(request.form['motor_id'])
+            description = request.form.get('description', '')
+            image_url = request.form.get('image_url', '')
+
+            # Validate data
+            if not name or price <= 0 or stock < 0 or motor_id <= 0:
+                flash("Invalid data. Please check your inputs.", "warning")
+                return render_template('admin/product_form.html', action="Add New", product=request.form)
+
+            # Check for unique motor_id
+            existing_product = Product.query.filter_by(motor_id=motor_id).first()
+            if existing_product:
+                flash(f"Motor ID {motor_id} is already assigned to another product.", "error")
+                return render_template('admin/product_form.html', action="Add New", product=request.form)
+
+            # Create and save the new product
+            new_product = Product(
+                name=name,
+                price=price,
+                stock=stock,
+                motor_id=motor_id,
+                description=description,
+                image_url=image_url
+            )
+            db.session.add(new_product)
+            db.session.commit()
+            flash(f"Product '{name}' added successfully!", "success")
+            return redirect(url_for('list_products'))
+
+        except ValueError:
+            flash("Invalid input. Please enter valid numbers for price, stock, and motor ID.", "danger")
+            return render_template('admin/product_form.html', action="Add New", product=request.form)
+        except Exception as e:
+            db.session.rollback()
+            flash(f"An error occurred: {e}", "danger")
+            return render_template('admin/product_form.html', action="Add New", product=request.form)
+
+    # Render the form for GET requests
+    return render_template('admin/product_form.html', action="Add New", product=None)
+
+
 # --- Main Execution Block ---
 if __name__ == '__main__':
     # For local development using 'python app.py'
