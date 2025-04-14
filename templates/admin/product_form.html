@@ -1,42 +1,77 @@
-{% extends "base.html" %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ action }} Product Slot</title>
+    <!-- Optional: Link to a shared CSS file -->
+    <!-- <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"> -->
+    <style>
+        body { font-family: sans-serif; padding: 15px; max-width: 600px; }
+        form div { margin-bottom: 12px; }
+        label { display: inline-block; width: 120px; vertical-align: top; font-weight: bold; }
+        input[type=text], input[type=number], textarea { width: calc(100% - 130px); padding: 6px; border: 1px solid #ccc; box-sizing: border-box; font-size: 0.95em;}
+        textarea { height: 80px; vertical-align: top; }
+        button { padding: 10px 18px; margin-right: 10px; cursor: pointer;}
+        small { margin-left: 125px; color: #555; display: block; font-size: 0.85em; }
+        .flash-success { background-color: #d4edda; color: #155724; padding: 10px; margin-bottom: 1em; border: 1px solid #c3e6cb; border-radius: 4px;}
+        .flash-error { background-color: #f8d7da; color: #721c24; padding: 10px; margin-bottom: 1em; border: 1px solid #f5c6cb; border-radius: 4px;}
+        .flash-warning { background-color: #fff3cd; color: #856404; padding: 10px; margin-bottom: 1em; border: 1px solid #ffeeba; border-radius: 4px;}
+    </style>
+</head>
+<body>
+    {% set product_data = product if product and product.id else None %}
+    {% set form_data = product if product and not product.id else None %}
 
-{% block title %}Admin - {{ action }} Product{% endblock %}
+    <h1>{{ action }} Product Slot {% if product_data %} (DB ID: {{ product_data.id }}) {% endif %}</h1>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}<div>{% for category, message in messages %}<div class="flash-{{ category }}">{{ message }}</div>{% endfor %}</div>{% endif %}
+    {% endwith %}
 
-{% block content %}
-<h2>{{ action }} Product</h2>
-<hr>
-
-{# Determine form action URL based on whether we are adding or editing #}
-{% if action == "Edit" %}
-<form method="POST" action="{{ url_for('edit_product', product_id=product.id) }}">
-{% else %}
-<form method="POST" action="{{ url_for('add_product') }}">
-{% endif %}
-
-  <div class="mb-3">
-    <label for="name" class="form-label">Product Name</label>
-    <input type="text" class="form-control" id="name" name="name" value="{{ product.name if product else '' }}" required>
-  </div>
-  <div class="mb-3">
-    <label for="price" class="form-label">Price (£)</label>
-    <input type="number" step="0.01" min="0.01" class="form-control" id="price" name="price" value="{{ product.price if product else '' }}" required>
-  </div>
-  <div class="mb-3">
-    <label for="stock" class="form-label">Stock Quantity</label>
-    <input type="number" min="0" class="form-control" id="stock" name="stock" value="{{ product.stock if product else '0' }}" required>
-  </div>
-   <div class="mb-3">
-    <label for="motor_id" class="form-label">Motor ID (Unique)</label>
-    <input type="number" min="1" class="form-control" id="motor_id" name="motor_id" value="{{ product.motor_id if product else '' }}" required>
-  </div>
-   <div class="mb-3">
-    <label for="image_url" class="form-label">Image URL (Optional)</label>
-    <input type="url" class="form-control" id="image_url" name="image_url" value="{{ product.image_url if product and product.image_url else '' }}">
-     <small class="form-text text-muted">Enter the full web address (URL) of an image for the product.</small>
-  </div>
-
-  <button type="submit" class="btn btn-primary">Save Product</button>
-  <a href="{{ url_for('list_products') }}" class="btn btn-secondary">Cancel</a>
-</form>
-
-{% endblock %}
+    {% if action == 'Edit' %}
+    <form method="POST" action="{{ url_for('edit_product', product_id=product_data.id) }}">
+    {% else %}
+    <form method="POST" action="{{ url_for('add_product') }}">
+    {% endif %}
+        <div>
+            <label for="machine_id">Machine ID:</label>
+            <input type="text" id="machine_id" name="machine_id" value="{{ form_data.machine_id if form_data else (product_data.machine_id if product_data else '') }}" required>
+            <small>(e.g., VM001, LOBBY_EAST). Must match exactly for grouping.</small>
+        </div>
+        <div>
+            <label for="motor_id">Motor ID (Slot):</label>
+            <input type="number" id="motor_id" name="motor_id" value="{{ form_data.motor_id if form_data else (product_data.motor_id if product_data else '') }}" step="1" min="1" required>
+             <small>(Positive integer, unique within this Machine ID).</small>
+        </div>
+        <div>
+            <label for="name">Product Name:</label>
+            <input type="text" id="name" name="name" value="{{ form_data.name if form_data else (product_data.name if product_data else '') }}" required>
+        </div>
+        <div>
+            <label for="price">Price:</label>
+            <input type="number" id="price" name="price" value="{{ form_data.price if form_data else (product_data.price if product_data else '') }}" step="0.01" min="0.01" required>
+            <small>(e.g., 1.50).</small>
+        </div>
+         <div>
+            <label for="stock">Stock (This Slot):</label>
+            <input type="number" id="stock" name="stock" value="{{ form_data.stock if form_data else (product_data.stock if product_data else '0') }}" step="1" min="0" required>
+            <small>(Number of items currently in this specific slot).</small>
+        </div>
+        <div>
+            <label for="description">Description:</label>
+            <textarea id="description" name="description">{{ form_data.description if form_data else (product_data.description if product_data else '') }}</textarea>
+            <small>(Optional).</small>
+        </div>
+        <div>
+            <label for="image_url">Image URL:</label>
+            <input type="text" id="image_url" name="image_url" value="{{ form_data.image_url if form_data else (product_data.image_url if product_data else '') }}">
+             <small>(Optional).</small>
+        </div>
+        <br>
+        <div>
+            <label></label> {# For alignment #}
+            <button type="submit">{% if action == 'Edit' %}Save Changes{% else %}Add Product Slot{% endif %}</button>
+            <a href="{{ url_for('list_products') }}">Cancel</a>
+        </div>
+    </form>
+</body>
+</html>

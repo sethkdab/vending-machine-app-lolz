@@ -1,16 +1,190 @@
-{% extends "base.html" %}
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Dashboard</title>
+    <style>
+        /* Basic Reset */
+        body, h1, h2, ul, li, form, label, input, button {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: Arial, sans-serif;
+        }
+        body {
+            background-color: #f4f4f4;
+            color: #333;
+            line-height: 1.6;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        #vending-machine-list {
+            list-style: none;
+            padding: 0;
+        }
+        #vending-machine-list li {
+            margin-bottom: 10px;
+            padding: 10px;
+            background-color: #fff;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        #vending-machine-details {
+            background-color: #fff;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="app"> 
+        <header>
+            <h1>Admin Dashboard</h1>
+        </header>
+        <main>
+            <section id="vending-machine-list">
+                <h2>Vending Machines</h2>
+                <ul id="vending-machine-list">
+                </ul>
+            </section>
+        </main>
+    <footer>
+        <p>&copy; 2023 Vending Machine Corp</p>
+    </footer>
+    </div>
+    <script>
+         function loadVendingMachinesView() {
+            history.pushState({ view: 'list' }, '', '#list');
+            const app = document.getElementById('app');
+            app.innerHTML = `
+                <header>
+                    <h1>Admin Dashboard</h1>
+                </header>
+                <main>
+                    <section id="vending-machine-list-section">
+                        <h2>Vending Machines</h2>
+                        <ul id="vending-machine-list"></ul>
+                    </section>
+                </main>
+                <footer>
+                    <p>&copy; 2023 Vending Machine Corp</p>
+                </footer>
+            `;
+             loadVendingMachines();
+        }
+        function loadVendingMachines() {
+            // Sample data - replace with actual data fetching from backend
+            const vendingMachines = [
+                { id: "VM001", location: "Building A Lobby", price: 2.5, stock: 50 },
+                { id: "VM002", location: "Building B Cafeteria", price: 3.0, stock: 30 },
+                { id: "VM003", location: "Building C Gym", price: 2.0, stock: 25 },
+            ];
+            const vendingList = document.getElementById("vending-machine-list");
+             vendingList.innerHTML = "";
+            vendingMachines.forEach((machine) => {
+                const listItem = document.createElement("li");
+                const link = document.createElement("a");
+                link.href = `#detail/${machine.id}`;
+                link.textContent = machine.id;
+                link.addEventListener("click", (event) => {
+                    event.preventDefault(); // Prevent default link behavior
+                    loadVendingMachineDetails(machine.id);
+                });
+                listItem.appendChild(link);
+                vendingList.appendChild(listItem);
+            });
+        }
+        function loadVendingMachineDetails(machineId) {
+            history.pushState({ view: 'detail', machineId: machineId }, '', `#detail/${machineId}`);
+            // Sample data - replace with actual data fetching from backend
+            const vendingMachine = {
+                VM001: { price: 2.5, stock: 50 },
+                VM002: { price: 3.0, stock: 30 },
+                VM003: { price: 2.0, stock: 25 },
+            }[machineId];
+            const app = document.getElementById("app");
+            app.innerHTML = `
+                <header>
+                    <h1>Vending Machine ${machineId}</h1>
+                </header>
+                <main>
+                    <section id="vending-machine-details">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Price</th>
+                                    <th>Stock</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>
+                                        <input type="number" id="price" value="${vendingMachine.price}" step="0.01" class="form-control">
+                                    </td>
+                                    <td>
+                                        <input type="number" id="stock" value="${vendingMachine.stock}" class="form-control">
+                                    </td>
+                                    <td>
+                                        <button id="save-button" class="btn btn-primary">Change</button>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </section>
+                </main>
+            `;
+            document.getElementById('save-button').addEventListener('click', () => {
+                saveChanges(machineId);
+            });
+        }
+        function saveChanges(machineId) {
+            const priceInput = document.getElementById('price');
+            const stockInput = document.getElementById('stock');
 
-{% block title %}Admin Dashboard{% endblock %}
+            const updatedData = {
+                machine_id: machineId,
+                price: parseFloat(priceInput.value),
+                stock: parseInt(stockInput.value),
+            };
 
-{% block content %}
-<h2>Admin Dashboard</h2>
-<hr>
-<ul>
-  {% for vend_id in vending_ids %}
-  <li>
-    Vending Machine ID: {{ vend_id }}
-    <a href="{{ url_for('manage_vending', vend_id=vend_id) }}" class="btn btn-primary btn-sm">Manage</a>
-  </li>
-  {% endfor %}
-</ul>
-{% endblock %}
+            fetch('/update_vending_machine', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(updatedData),
+            })
+                .then((response) => response.json())
+                .then((data) => {
+                    if (data.error) {
+                        alert(`Error: ${data.error}`);
+                    } else {
+                        alert(data.message);
+                        // Reload the vending machine details to reflect the changes
+                        loadVendingMachineDetails(machineId);
+                    }
+                })
+                .catch((error) => {
+                    console.error('Error:', error);
+                    alert('An error occurred while updating the vending machine.');
+                });
+        }
+        window.addEventListener('popstate', (event) => {
+            if (event.state) {
+                if (event.state.view === 'list') {
+                    loadVendingMachinesView();
+                } else if (event.state.view === 'detail') {
+                    loadVendingMachineDetails(event.state.machineId);
+                }
+            }
+        });
+        loadVendingMachinesView();
+    </script>
+</body>
+</html>
