@@ -1,7 +1,5 @@
-# --- app.py ---
-# (Includes previous setup, models, home route, admin routes)
-# Add jsonify to imports if not already there
 import os
+import json
 from dotenv import load_dotenv
 from flask import (
     Flask, request, render_template,
@@ -10,6 +8,7 @@ from flask import (
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from datetime import datetime
+from functools import wraps # For API key decorator
 
 # --- Load Environment Variables ---
 load_dotenv()
@@ -27,28 +26,46 @@ if db_url.startswith("postgres://"):
 secret_key = os.environ.get('SECRET_KEY')
 if not secret_key:
     print("Warning: SECRET_KEY not set. Using insecure default.")
-    secret_key = 'your_actual_secret_key_here' # CHANGE THIS in .env
+    secret_key = 'your_actual_secret_key_here_flask' # CHANGE THIS in .env for Flask sessions/flash
 
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.secret_key = secret_key
+app.secret_key = secret_key # Used for Flask flash messages etc.
+
+# --- Load Vending Specific Config ---
+MACRODROID_API_KEY = os.environ.get('MACRODROID_API_KEY')
+if not MACRODROID_API_KEY:
+    # In a real production scenario, you might want to raise an error or prevent startup
+    print("CRITICAL WARNING: MACRODROID_API_KEY environment variable not set. Payment endpoint is insecure and will fail!")
+    # For development/testing, you might allow it, but log heavily.
+    # MACRODROID_API_KEY = None # Or set a dummy value for testing if absolutely needed
+
+# Optional: Load account mapping even if not used in this endpoint, maybe useful elsewhere
+ABA_ACCOUNT_MAPPING_JSON = os.environ.get('ABA_ACCOUNT_MAPPING', '{}')
+try:
+    ACCOUNT_NUMBER_TO_MACHINE_ID = json.loads(ABA_ACCOUNT_MAPPING_JSON)
+    if not isinstance(ACCOUNT_NUMBER_TO_MACHINE_ID, dict):
+        raise ValueError("ABA_ACCOUNT_MAPPING is not a valid JSON object.")
+    print(f"Loaded ABA Account Mapping (for reference): {ACCOUNT_NUMBER_TO_MACHINE_ID}")
+except (json.JSONDecodeError, ValueError) as e:
+    print(f"ERROR: Could not parse ABA_ACCOUNT_MAPPING JSON: {e}")
+    ACCOUNT_NUMBER_TO_MACHINE_ID = {}
+
 
 # --- Initialize DB and Migrate ---
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 
 # --- Database Models ---
-# (Keep the Product, VendCommand, Transaction models exactly as defined
-#  in the previous complete app.py code for the simpler solution)
 class Product(db.Model):
     __tablename__ = 'product'
     id = db.Column(db.Integer, primary_key=True)
-    machine_id = db.Column(db.String(80), nullable=False, index=True) # Machine this slot belongs to
+    machine_id = db.Column(db.String(80), nullable=False, index=True)
     name = db.Column(db.String(100), nullable=False)
     price = db.Column(db.Float, nullable=False)
-    stock = db.Column(db.Integer, nullable=False, default=0) # Stock for THIS slot
+    stock = db.Column(db.Integer, nullable=False, default=0)
     description = db.Column(db.Text, nullable=True)
-    motor_id = db.Column(db.Integer, nullable=False) # Slot number within the machine
+    motor_id = db.Column(db.Integer, nullable=False)
     image_url = db.Column(db.String(255), nullable=True)
     __table_args__ = (db.UniqueConstraint('machine_id', 'motor_id', name='uq_machine_motor_product'),)
     commands = db.relationship('VendCommand', backref='product_commanded', lazy='dynamic')
@@ -58,10 +75,11 @@ class Product(db.Model):
 class VendCommand(db.Model):
     __tablename__ = 'vend_command'
     id = db.Column(db.Integer, primary_key=True)
-    vend_id = db.Column(db.String(80), nullable=False) # Machine ID where command should run
-    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False) # Which specific product slot
-    motor_id = db.Column(db.Integer, nullable=False) # Which motor to activate
-    status = db.Column(db.String(30), nullable=False, default='pending') # Status: pending, acknowledged_success, acknowledged_failure, expired
+    vend_id = db.Column(db.String(80), nullable=False, index=True) # Machine ID (e.g., "v3")
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
+    motor_id = db.Column(db.Integer, nullable=False)
+    # Statuses: awaiting_payment, pending, acknowledged_success, acknowledged_failure, cancelled_by_new_request, etc.
+    status = db.Column(db.String(40), nullable=False, default='awaiting_payment', index=True) # Default for new commands via /buy
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     acknowledged_at = db.Column(db.DateTime, nullable=True)
     def __repr__(self): return f'<Command {self.id} for Vend {self.vend_id} - Prod {self.product_id} / Motor {self.motor_id} ({self.status})>'
@@ -69,17 +87,40 @@ class VendCommand(db.Model):
 class Transaction(db.Model):
     __tablename__ = 'transaction'
     id = db.Column(db.Integer, primary_key=True)
-    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False) # Which specific product slot
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
     quantity = db.Column(db.Integer, nullable=False, default=1)
     amount_paid = db.Column(db.Float, nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     def __repr__(self): return f'<Transaction {self.id} for Prod {self.product_id} @ {self.timestamp}>'
+
+# --- Decorator for API Key Authentication ---
+def require_api_key(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Check if the key is configured on the server AT ALL
+        if not MACRODROID_API_KEY:
+            print("CRITICAL SECURITY ALERT: API Key decorator invoked but MACRODROID_API_KEY is NOT SET on the server!")
+            return jsonify({"error": "Server configuration error: Missing API Key setup"}), 503 # Service Unavailable
+
+        # Get the key from the request header
+        api_key = request.headers.get('X-API-Key')
+
+        # Compare the provided key with the server's configured key
+        if not api_key or api_key != MACRODROID_API_KEY:
+            print(f"[AUTH-FAIL] '/{f.__name__}' endpoint: Invalid or missing API Key. Provided: '{api_key}'")
+            return jsonify({"error": "Unauthorized: Invalid API Key"}), 401 # Unauthorized
+
+        # If keys match, proceed with the actual route function
+        print(f"[AUTH-OK] '/{f.__name__}' endpoint: API Key verified.")
+        return f(*args, **kwargs)
+    return decorated_function
 
 # --- Routes ---
 
 # Simple Home Route
 @app.route('/')
 def home():
+    # ... (keep your home route) ...
     return """
     <h1>Minimal Vending App</h1>
     <p><a href="/admin/machines">View Machine IDs</a></p>
@@ -89,8 +130,7 @@ def home():
     """
 
 # --- Admin Routes ---
-# (Keep list_machines_from_products, list_products, add_product, edit_product, delete_product)
-# List distinct machine IDs found in the Product table
+# ... (keep list_machines_from_products, list_products, add_product, edit_product, delete_product) ...
 @app.route('/admin/machines')
 def list_machines_from_products():
     try:
@@ -101,7 +141,6 @@ def list_machines_from_products():
         machine_ids = []
     return render_template('admin/machines_simple.html', machine_ids=machine_ids)
 
-# List Products (Slots)
 @app.route('/admin/products')
 def list_products():
     try:
@@ -111,10 +150,9 @@ def list_products():
         products = []
     return render_template('admin/products.html', products=products)
 
-# Add Product Slot (CREATE)
 @app.route('/admin/product/add', methods=['GET', 'POST'])
 def add_product():
-    # ... (Keep full code from previous answer) ...
+    # ... (Your existing add_product logic) ...
     if request.method == 'POST':
         try:
             machine_id_str = request.form.get('machine_id')
@@ -139,10 +177,9 @@ def add_product():
         except Exception as e: db.session.rollback(); flash(f"Error adding product: {e}", 'danger'); print(f"[ADD PRODUCT ERROR] {e}"); return render_template('admin/product_form.html', action="Add New", product=request.form)
     else: return render_template('admin/product_form.html', action="Add New", product=None)
 
-# Edit Product Slot (UPDATE)
 @app.route('/admin/product/edit/<int:product_id>', methods=['GET', 'POST'])
 def edit_product(product_id):
-    # ... (Keep full code from previous answer) ...
+    # ... (Your existing edit_product logic) ...
     product = Product.query.get_or_404(product_id)
     if request.method == 'POST':
         try:
@@ -162,17 +199,26 @@ def edit_product(product_id):
         except Exception as e: db.session.rollback(); flash(f"Error updating product: {e}", 'danger'); print(f"[EDIT PRODUCT ERROR] {e}"); product = Product.query.get_or_404(product_id); return render_template('admin/product_form.html', action="Edit", product=product)
     else: return render_template('admin/product_form.html', action="Edit", product=product)
 
-# Delete Product Slot (DELETE)
 @app.route('/admin/product/delete/<int:product_id>', methods=['POST'])
 def delete_product(product_id):
-    # ... (Keep full code from previous answer) ...
+    # ... (Your existing delete_product logic) ...
     product = Product.query.get_or_404(product_id)
     product_desc = f"'{product.name}' (Machine: {product.machine_id}, Motor: {product.motor_id})"
     try:
-        if product.commands.first() or product.transactions.first():
-            flash(f"Cannot delete {product_desc} - it has associated commands or transactions.", 'warning'); return redirect(url_for('list_products'))
-        db.session.delete(product); db.session.commit(); flash(f"Product {product_desc} deleted successfully!", 'success')
-    except Exception as e: db.session.rollback(); flash(f"Error deleting product {product_desc}: {e}", 'danger'); print(f"[DELETE PRODUCT ERROR] {e}")
+        # Prevent deletion if related records exist
+        cmd_exists = VendCommand.query.filter_by(product_id=product_id).first()
+        tran_exists = Transaction.query.filter_by(product_id=product_id).first()
+        if cmd_exists or tran_exists:
+             flash(f"Cannot delete {product_desc} - it has associated commands or transactions. Please clear them first or contact support.", 'warning')
+             return redirect(url_for('list_products'))
+
+        db.session.delete(product)
+        db.session.commit()
+        flash(f"Product {product_desc} deleted successfully!", 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f"Error deleting product {product_desc}: {e}", 'danger')
+        print(f"[DELETE PRODUCT ERROR] {e}")
     return redirect(url_for('list_products'))
 
 # --- Vending Machine User Interface ---
@@ -187,80 +233,188 @@ def vending_interface(machine_identifier):
         print(f"Error fetching products for machine {machine_identifier}: {e}")
         flash("Error loading products for this machine.", "error")
         available_products = []
+
+    # Check for pending purchases for THIS machine to maybe show a status
+    pending_command = VendCommand.query.filter_by(
+        vend_id=machine_identifier,
+        status='pending' # Waiting for ESP pickup
+    ).order_by(VendCommand.created_at.desc()).first()
+
+    awaiting_payment_command = VendCommand.query.filter_by(
+        vend_id=machine_identifier,
+        status='awaiting_payment' # Waiting for user payment
+    ).order_by(VendCommand.created_at.desc()).first()
+
+
     return render_template('vending_interface.html',
                            machine_id=machine_identifier,
-                           products=available_products)
+                           products=available_products,
+                           pending_command=pending_command,
+                           awaiting_payment_command=awaiting_payment_command)
 
-# --- Buy Route (MODIFIED) ---
+
+# --- Buy Route (Initiates 'awaiting_payment') ---
 @app.route('/buy/<int:product_id>', methods=['POST'])
 def buy_product(product_id):
-    redirect_url = url_for('home') # Default redirect
-    product_info = Product.query.with_entities(Product.machine_id).filter_by(id=product_id).first()
-    if product_info:
-        redirect_url = url_for('vending_interface', machine_identifier=product_info.machine_id)
+    product = Product.query.get_or_404(product_id)
+    machine_id = product.machine_id
+    redirect_url = url_for('vending_interface', machine_identifier=machine_id)
+
+    # Find the ABA account number for THIS machine (Needed for user instructions)
+    target_account_number = None
+    # Efficiently find the account number associated with the product's machine_id
+    for acc_num, mach_id in ACCOUNT_NUMBER_TO_MACHINE_ID.items():
+        if mach_id == machine_id:
+            target_account_number = acc_num
+            break
+
+    if not target_account_number:
+        flash(f"Configuration error: No ABA account set for machine '{machine_id}'. Cannot process payment.", "danger")
+        print(f"[BUY ERROR] No account number configured for machine_id: {machine_id}")
+        return redirect(redirect_url)
 
     try:
-        product = Product.query.get_or_404(product_id)
-        if product.stock <= 0:
-            flash(f"Sorry, '{product.name}' in slot {product.motor_id} just went out of stock!", "warning")
+        # Check stock again right before creating command
+        product = Product.query.get(product_id) # Re-fetch to be safe
+        if not product or product.stock <= 0:
+            flash(f"Sorry, '{product.name if product else 'Item'}' is out of stock!", "warning")
             return redirect(redirect_url)
 
-        # --- Create Vend Command ONLY ---
+        # --- Cancel Previous Awaiting Payment Commands for THIS Machine ---
+        # Use with_for_update() if your DB supports it for better locking, but often okay without
+        existing_awaiting_commands = VendCommand.query.filter_by(
+            vend_id=machine_id,
+            status='awaiting_payment'
+        ).all()
+
+        for cmd in existing_awaiting_commands:
+            print(f"[BUY] Cancelling previous awaiting command ID {cmd.id} for machine {machine_id}")
+            cmd.status = 'cancelled_by_new_request'
+            # db.session.add(cmd) # Mark as dirty, commit will handle it
+
+        # --- Create New Vend Command (Awaiting Payment) ---
         new_command = VendCommand(
-            vend_id=product.machine_id,
+            vend_id=machine_id,
             product_id=product.id,
             motor_id=product.motor_id,
-            status='pending' # Mark as waiting for ESP32
+            status='awaiting_payment' # Start in this state
         )
         db.session.add(new_command)
-        # --- DO NOT CHANGE STOCK HERE ---
-        db.session.commit()
-        flash(f"Request to vend '{product.name}' (Slot {product.motor_id}) sent! Please wait.", "success")
+        db.session.commit() # Commit cancellation and new command creation
+
+        # --- Inform User for ABA Payment ---
+        # Simple formatting for display
+        formatted_account = "..."+target_account_number[-4:] # Show last 4 digits only
+        flash_message = (
+            f"Request for '{product.name}' initiated! "
+            f"To complete purchase, please transfer exactly <b>{product.price:.2f} USD</b> "
+            f"to ABA account ending in <b>{formatted_account}</b> "
+            f"using your ABA Mobile app. The machine will dispense after payment is confirmed."
+        )
+        flash(flash_message, "info") # Use 'info' category
+        print(f"[BUY] Created VendCommand {new_command.id} for Product {product_id} on Machine {machine_id}. Status: awaiting_payment. Target ABA Account: {target_account_number}")
+
+        # No automatic redirection to ABA needed/possible here based on requirements
 
     except Exception as e:
         db.session.rollback()
-        print(f"Error processing purchase for product {product_id}: {e}")
-        flash(f"An error occurred trying to buy item.", "danger")
-        # Redirect URL determined at the start of the try block
+        print(f"[BUY ERROR] Exception processing purchase for product {product_id}: {e}")
+        flash(f"An error occurred processing your request. Please try again.", "danger")
 
     return redirect(redirect_url)
 
 
-# --- ESP32 Interaction Routes ---
+# --- Payment Received Endpoint (Called by MacroDroid) ---
+@app.route('/payment-received', methods=['POST'])
+@require_api_key # Apply the security decorator
+def payment_received():
+    """
+    Receives notification FROM MACRODROID when a specific payment
+    (e.g., 0.01 USD to account linked to 'v3') is detected.
+    Finds the corresponding 'awaiting_payment' command and updates its status
+    to 'pending' so the ESP32 can pick it up.
+    Relies on MacroDroid sending {'machine_id': 'the_correct_id'}.
+    """
+    # 1. Check if the request is JSON
+    if not request.is_json:
+        print("[PAYMENT-RECEIVED] Error: Request received is not JSON.")
+        return jsonify({"error": "Request must be JSON"}), 400 # Bad Request
+
+    # 2. Parse the JSON data
+    data = request.get_json()
+    print(f"[PAYMENT-RECEIVED] Received data payload: {data}")
+
+    # 3. Extract the machine_id (sent directly by MacroDroid)
+    received_machine_id = data.get("machine_id")
+
+    # 4. Validate that machine_id was provided
+    if not received_machine_id:
+        print("[PAYMENT-RECEIVED] Error: 'machine_id' field missing in JSON payload.")
+        return jsonify({"error": "Missing 'machine_id' field in request body"}), 400 # Bad Request
+
+    print(f"[PAYMENT-RECEIVED] Processing payment signal for machine_id: '{received_machine_id}'")
+
+    # --- Find the Command and Update Status ---
+    try:
+        # Find the *most recent* command for THIS specific machine that is currently waiting for payment.
+        command_to_update = VendCommand.query.filter_by(
+            vend_id=received_machine_id,
+            status='awaiting_payment'
+        ).order_by(VendCommand.created_at.desc()).first()
+
+        # 5. Check if a suitable command was found
+        if command_to_update:
+            # Found the command! Update its status to 'pending'
+            print(f"[PAYMENT-RECEIVED] Found matching command ID {command_to_update.id} (Status: {command_to_update.status}). Updating status to 'pending'.")
+            command_to_update.status = 'pending'
+            # You could optionally add a timestamp here like:
+            # command_to_update.payment_confirmed_at = datetime.utcnow()
+
+            # Commit the status change to the database
+            db.session.commit()
+
+            print(f"[PAYMENT-RECEIVED] SUCCESS: Updated Command ID {command_to_update.id} status to 'pending' for machine '{received_machine_id}'.")
+
+            # Return a success response to MacroDroid
+            return jsonify({"message": f"Payment acknowledged. Command {command_to_update.id} for machine {received_machine_id} is now pending."}), 200 # OK
+
+        else:
+            # No command was found for this machine in 'awaiting_payment' status.
+            # This is normal if payment notification is late/duplicate, or if user paid without 'buying' first.
+            print(f"[PAYMENT-RECEIVED] WARNING: No command found in 'awaiting_payment' status for machine_id '{received_machine_id}'. Signal ignored.")
+
+            # Return a 'Not Found' response - the resource (command to update) wasn't there.
+            return jsonify({"error": f"No command currently awaiting payment found for machine '{received_machine_id}'."}), 404 # Not Found
+
+    except Exception as e:
+        # 6. Handle potential database errors
+        db.session.rollback() # Rollback any partial changes on error
+        print(f"[PAYMENT-RECEIVED] DATABASE ERROR processing payment signal for machine '{received_machine_id}': {e}")
+        # Return a server error response
+        return jsonify({"error": "Internal server error during payment processing"}), 500 # Internal Server Error
+
+
+# --- ESP32 Interaction Routes (Unchanged) ---
 
 @app.route('/get_command', methods=['GET'])
 def get_command():
-    """Called by the ESP32 to get the next pending command."""
-    # Get machine ID from query parameter
+    """Called by the ESP32 to get the next 'pending' command."""
     req_vend_id = request.args.get('vend_id')
     if not req_vend_id:
         print("[GET_COMMAND] Error: vend_id query parameter missing")
         return jsonify({"error": "vend_id is required"}), 400
-
     print(f"[GET_COMMAND] Request received from vend_id: {req_vend_id}")
-
     try:
-        # Find the oldest pending command for this specific vending machine
         command = VendCommand.query.filter_by(
             vend_id=req_vend_id,
-            status='pending'
+            status='pending' # Only fetch commands ready for vending
         ).order_by(VendCommand.created_at.asc()).first()
-
         if command:
-            # Found a pending command
             print(f"[GET_COMMAND] Found pending command ID: {command.id} for Motor: {command.motor_id}")
-            # Return the command details needed by ESP32
-            # ESP32 code expects "motor_id" and "command_id"
-            return jsonify({
-                "motor_id": command.motor_id,
-                "command_id": command.id
-                # "action": "start" # ESP32 code doesn't actually check for this 'action' key based on provided code review
-            })
+            return jsonify({"motor_id": command.motor_id, "command_id": command.id})
         else:
-            # No pending commands for this machine
             print(f"[GET_COMMAND] No pending commands found for vend_id: {req_vend_id}")
-            return jsonify({"motor_id": None, "command_id": None}) # Indicate no command
-
+            return jsonify({"motor_id": None, "command_id": None})
     except Exception as e:
         print(f"[GET_COMMAND] Database error for vend_id {req_vend_id}: {e}")
         return jsonify({"error": "Database error processing request"}), 500
@@ -272,93 +426,57 @@ def acknowledge():
     if not request.is_json:
         print("[ACKNOWLEDGE] Error: Request is not JSON")
         return jsonify({"error": "Request must be JSON"}), 400
-
     data = request.get_json()
     print(f"[ACKNOWLEDGE] Received data: {data}")
-
-    # Extract data from JSON payload (match keys used in ESP32 sendAck)
-    req_command_id = data.get("command_id")
-    req_vend_id = data.get("vend_id")
-    req_motor_id = data.get("motor_id") # ESP32 sends motor_id too
-    req_status = data.get("status") # Should be "success" or "failure"
-
-    # Basic validation of received data
+    req_command_id = data.get("command_id"); req_vend_id = data.get("vend_id"); req_motor_id = data.get("motor_id"); req_status = data.get("status")
     if not all([req_command_id, req_vend_id, req_motor_id is not None, req_status]):
-         print(f"[ACKNOWLEDGE] Error: Missing fields in JSON payload. Got keys: {list(data.keys())}")
+         print(f"[ACKNOWLEDGE] Error: Missing fields. Got: {list(data.keys())}")
          return jsonify({"error": "Missing command_id, vend_id, motor_id, or status"}), 400
-
     if req_status not in ["success", "failure"]:
-        print(f"[ACKNOWLEDGE] Error: Invalid status '{req_status}' received.")
+        print(f"[ACKNOWLEDGE] Error: Invalid status '{req_status}'.")
         return jsonify({"error": "Invalid status value"}), 400
-
     try:
-        # Find the command the ESP32 is referring to
-        command = db.session.get(VendCommand, req_command_id) # Use efficient primary key lookup
-
+        command = db.session.get(VendCommand, req_command_id)
         if not command:
             print(f"[ACKNOWLEDGE] Error: Command ID {req_command_id} not found.")
             return jsonify({"error": "Command not found"}), 404
-
-        # --- Sanity Checks ---
         if command.vend_id != req_vend_id:
             print(f"[ACKNOWLEDGE] Error: Mismatched vend_id for Command {req_command_id}. DB: {command.vend_id}, Req: {req_vend_id}")
-            return jsonify({"error": "Vending machine ID mismatch"}), 400 # Prevent wrong machine ack
+            return jsonify({"error": "Vending machine ID mismatch"}), 400
+        # Optional: Check motor_id match as a warning or error
+        # if command.motor_id != req_motor_id: print(f"[ACK] Warning: Motor mismatch...")
 
-        if command.motor_id != req_motor_id:
-             print(f"[ACKNOWLEDGE] Warning: Mismatched motor_id for Command {req_command_id}. DB: {command.motor_id}, Req: {req_motor_id}")
-             # Decide if this is an error or just a warning
-             # return jsonify({"error": "Motor ID mismatch"}), 400
-
-        if command.status != 'pending':
-            # Avoid processing acknowledged or expired commands again
-            print(f"[ACKNOWLEDGE] Info: Command {req_command_id} already processed (status: {command.status}). Ignoring ACK.")
-            return jsonify({"message": f"Command already in status {command.status}"}), 200 # OK response, but do nothing
+        if command.status != 'pending': # Make sure we are acknowledging a command that was actually pending
+            print(f"[ACKNOWLEDGE] Info: Command {req_command_id} not in 'pending' state (Status: {command.status}). Ignoring ACK.")
+            return jsonify({"message": f"Command already processed (status: {command.status})"}), 200 # Or maybe 409 Conflict? 200 is okay.
 
         # --- Process Acknowledgment ---
-        product = db.session.get(Product, command.product_id) # Get related product
+        product = db.session.get(Product, command.product_id)
+        ack_time = datetime.utcnow()
+        command.acknowledged_at = ack_time
 
         if req_status == "success":
             print(f"[ACKNOWLEDGE] Processing SUCCESS for Command {req_command_id}")
             command.status = "acknowledged_success"
-            command.acknowledged_at = datetime.utcnow()
-
             if product:
-                # --- Decrement Stock and Log Transaction ---
-                 # Double-check stock before decrementing
                 if product.stock > 0:
                     product.stock -= 1
-                    print(f"   - Decremented stock for Product {product.id} to {product.stock}")
-
-                    transaction = Transaction(
-                        product_id=product.id,
-                        quantity=1,
-                        amount_paid=product.price # Use price from Product table
-                    )
+                    print(f"   - Decremented stock for Product {product.id} ({product.name}) to {product.stock}")
+                    transaction = Transaction(product_id=product.id, quantity=1, amount_paid=product.price, timestamp=ack_time)
                     db.session.add(transaction)
-                    print(f"   - Logged transaction for Product {product.id}")
+                    print(f"   - Logged transaction ID {transaction.id if transaction.id else '(pending commit)'} for Product {product.id}")
                 else:
-                    # This case should be rare if stock checks work, but handle it
-                    print(f"   - WARNING: Acknowledged success for Command {req_command_id}, but Product {product.id} stock was already 0!")
-                    # Maybe mark command differently? Or just log?
-                    command.status = "acknowledged_success_stock_error" # Example of different status
-
+                    print(f"   - WARNING: Success ACK for Command {req_command_id}, but Product {product.id} stock was already 0!")
+                    command.status = "acknowledged_success_stock_error" # Mark differently
             else:
                 print(f"   - ERROR: Product {command.product_id} not found for successful Command {req_command_id}!")
-                # Cannot decrement stock or log transaction accurately
-                command.status = "acknowledged_success_product_missing" # Example
-
+                command.status = "acknowledged_success_product_missing"
 
         elif req_status == "failure":
             print(f"[ACKNOWLEDGE] Processing FAILURE for Command {req_command_id}")
             command.status = "acknowledged_failure"
-            command.acknowledged_at = datetime.utcnow()
-            # --- No stock change needed if we didn't decrement optimistically in /buy ---
+            # No stock change needed as we only decrement on success ACK now.
             print(f"   - Command {req_command_id} marked as failed.")
-            # If you *did* decrement stock in /buy, you would increment it here:
-            # if product:
-            #   product.stock += 1
-            #   print(f"   - Rolled back stock for Product {product.id} to {product.stock}")
-
 
         # --- Commit Changes to DB ---
         db.session.commit()
@@ -366,7 +484,7 @@ def acknowledge():
         return jsonify({"message": "Acknowledgment received"}), 200
 
     except Exception as e:
-        db.session.rollback() # Rollback on any error during processing
+        db.session.rollback()
         print(f"[ACKNOWLEDGE] DATABASE ERROR processing Command {req_command_id}: {e}")
         return jsonify({"error": "Database error during acknowledgment"}), 500
 
@@ -374,6 +492,9 @@ def acknowledge():
 # --- Run Block ---
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    debug_mode = os.environ.get('FLASK_DEBUG', 'true').lower() not in ['false', '0']
+    # Use FLASK_DEBUG env var provided by Render/Flask standard practice
+    debug_mode = os.environ.get('FLASK_DEBUG', '0') == '1'
     print(f"Starting Flask server on http://0.0.0.0:{port} with debug={debug_mode}")
+    # Set use_reloader=False if debug is True when running migrations or in some prod environments
+    # app.run(host='0.0.0.0', port=port, debug=debug_mode, use_reloader=not debug_mode)
     app.run(host='0.0.0.0', port=port, debug=debug_mode)
