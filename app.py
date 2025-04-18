@@ -9,6 +9,8 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from datetime import datetime
 from functools import wraps # For API key decorator
+from urllib.parse import quote_plus # <-- ADD THIS LINE
+
 
 # --- Load Environment Variables ---
 load_dotenv()
@@ -253,46 +255,61 @@ def vending_interface(machine_identifier):
                            awaiting_payment_command=awaiting_payment_command)
 
 
-# --- Buy Route (Initiates 'awaiting_payment') ---
+# --- Buy Route (MODIFIED FOR ABA DEEP LINK REDIRECT) ---
 @app.route('/buy/<int:product_id>', methods=['POST'])
 def buy_product(product_id):
+    """
+    Handles the 'Buy' button press.
+    1. Validates product/stock.
+    2. Finds the target ABA account for the machine.
+    3. Cancels any previous 'awaiting_payment' commands for this machine.
+    4. Creates a new VendCommand record with status 'awaiting_payment'.
+    5. Constructs the ABA Mobile deep link URL.
+    6. Redirects the user's browser to the ABA Mobile app via the deep link.
+    """
     product = Product.query.get_or_404(product_id)
     machine_id = product.machine_id
-    redirect_url = url_for('vending_interface', machine_identifier=machine_id)
+    # Default redirect back to the vending page in case of errors BEFORE redirection
+    redirect_url_on_error = url_for('vending_interface', machine_identifier=machine_id)
 
-    # Find the ABA account number for THIS machine (Needed for user instructions)
+    # --- 1. Find the Target ABA Account Number ---
     target_account_number = None
-    # Efficiently find the account number associated with the product's machine_id
-    for acc_num, mach_id in ACCOUNT_NUMBER_TO_MACHINE_ID.items():
-        if mach_id == machine_id:
-            target_account_number = acc_num
-            break
+    if ACCOUNT_NUMBER_TO_MACHINE_ID: # Check if mapping exists
+        for acc_num, mach_id in ACCOUNT_NUMBER_TO_MACHINE_ID.items():
+            if mach_id == machine_id:
+                # Ensure no spaces in the account number for the URL
+                target_account_number = "".join(acc_num.split())
+                break
+    else:
+        print(f"[BUY ERROR] ABA_ACCOUNT_MAPPING is empty or not loaded correctly.")
+        flash("Configuration error: Payment accounts not set up.", "danger")
+        return redirect(redirect_url_on_error)
 
     if not target_account_number:
-        flash(f"Configuration error: No ABA account set for machine '{machine_id}'. Cannot process payment.", "danger")
-        print(f"[BUY ERROR] No account number configured for machine_id: {machine_id}")
-        return redirect(redirect_url)
+        flash(f"Configuration error: No ABA account linked to machine '{machine_id}'.", "danger")
+        print(f"[BUY ERROR] No account number configured in mapping for machine_id: {machine_id}")
+        return redirect(redirect_url_on_error)
 
+    # --- 2. Check Stock (re-fetch for safety) ---
+    product = Product.query.get(product_id) # Get fresh data
+    if not product or product.stock <= 0:
+        flash(f"Sorry, '{product.name if product else 'Item'}' just went out of stock!", "warning")
+        return redirect(redirect_url_on_error)
+
+    # --- 3 & 4. Database Operations: Cancel Old, Create New Command ---
     try:
-        # Check stock again right before creating command
-        product = Product.query.get(product_id) # Re-fetch to be safe
-        if not product or product.stock <= 0:
-            flash(f"Sorry, '{product.name if product else 'Item'}' is out of stock!", "warning")
-            return redirect(redirect_url)
-
-        # --- Cancel Previous Awaiting Payment Commands for THIS Machine ---
-        # Use with_for_update() if your DB supports it for better locking, but often okay without
+        # Use a transaction block implicitly handled by commit/rollback
+        # Cancel previous awaiting commands for THIS machine
         existing_awaiting_commands = VendCommand.query.filter_by(
             vend_id=machine_id,
             status='awaiting_payment'
         ).all()
-
         for cmd in existing_awaiting_commands:
             print(f"[BUY] Cancelling previous awaiting command ID {cmd.id} for machine {machine_id}")
             cmd.status = 'cancelled_by_new_request'
-            # db.session.add(cmd) # Mark as dirty, commit will handle it
+            # No explicit db.session.add(cmd) needed, SQLAlchemy tracks changes
 
-        # --- Create New Vend Command (Awaiting Payment) ---
+        # Create the new command record
         new_command = VendCommand(
             vend_id=machine_id,
             product_id=product.id,
@@ -300,28 +317,48 @@ def buy_product(product_id):
             status='awaiting_payment' # Start in this state
         )
         db.session.add(new_command)
-        db.session.commit() # Commit cancellation and new command creation
 
-        # --- Inform User for ABA Payment ---
-        # Simple formatting for display
-        formatted_account = "..."+target_account_number[-4:] # Show last 4 digits only
-        flash_message = (
-            f"Request for '{product.name}' initiated! "
-            f"To complete purchase, please transfer exactly <b>{product.price:.2f} USD</b> "
-            f"to ABA account ending in <b>{formatted_account}</b> "
-            f"using your ABA Mobile app. The machine will dispense after payment is confirmed."
-        )
-        flash(flash_message, "info") # Use 'info' category
-        print(f"[BUY] Created VendCommand {new_command.id} for Product {product_id} on Machine {machine_id}. Status: awaiting_payment. Target ABA Account: {target_account_number}")
+        # Commit changes (cancellation and new command creation)
+        db.session.commit()
+        # new_command.id is now populated after commit
+        print(f"[BUY] Created VendCommand ID {new_command.id} (status: awaiting_payment) for Product {product_id} on Machine {machine_id}.")
 
-        # No automatic redirection to ABA needed/possible here based on requirements
+        # --- 5. Construct the ABA Deep Link URL ---
+        # ====================================================================
+        # !!! CRITICAL: REPLACE THE LINE BELOW WITH THE ACTUAL ABA FORMAT !!!
+        # This is just a HYPOTHETICAL EXAMPLE structure.
+        # Consult ABA Bank documentation for the correct parameters and base URL.
+        # Parameters might include: account, amount, currency, memo/reference, etc.
+        # You might need to URL-encode parts of it, especially the memo.
+        # ====================================================================
+
+        amount_str = f"{product.price:.2f}" # Format price correctly (e.g., "0.01")
+        # Example memo - make it useful for reconciliation if possible
+        memo_text = f"VM:{machine_id}-Cmd:{new_command.id}"
+        url_encoded_memo = quote_plus(memo_text) # URL-safe encoding
+
+        # --- VVVVVV --- THIS IS THE LINE TO EDIT --- VVVVVV ---
+        aba_deep_link_url = f"https://pay.ababank.com/ehikwoiZBp38PWgo8={target_account_number}&amount={amount_str}currency=USD&memo={url_encoded_memo}"
+        # --- ^^^^^^ --- THIS IS THE LINE TO EDIT --- ^^^^^^ ---
+
+        print(f"[BUY] Generated ABA Deep Link (MAY NEED ADJUSTMENT): {aba_deep_link_url}")
+
+        # --- 6. Redirect the user's browser to the ABA app ---
+        print(f"[BUY] Redirecting user to ABA Mobile...")
+        return redirect(aba_deep_link_url)
 
     except Exception as e:
-        db.session.rollback()
-        print(f"[BUY ERROR] Exception processing purchase for product {product_id}: {e}")
-        flash(f"An error occurred processing your request. Please try again.", "danger")
+        db.session.rollback() # Rollback DB changes on any error
+        print(f"[BUY ERROR] Exception during command creation or ABA redirect prep: {e}")
+        # Provide a generic error to the user
+        flash(f"An error occurred while initiating the purchase process. Please try again.", "danger")
+        # Redirect back to the vending page on error
+        return redirect(redirect_url_on_error)
 
-    return redirect(redirect_url)
+# ... (keep all other routes: /payment-received, /get_command, /acknowledge, admin, home, etc.) ...
+
+# --- Run Block ---
+# ... (keep the if __name__ == '__main__': block) ...
 
 
 # --- Payment Received Endpoint (Called by MacroDroid) ---
