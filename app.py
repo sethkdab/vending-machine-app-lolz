@@ -10,6 +10,7 @@ from flask_migrate import Migrate
 from datetime import datetime
 from functools import wraps
 from urllib.parse import quote_plus # Keep import, might be needed later
+from datetime import datetime, timedelta, timezone # Added timedelta and timezone
 
 # --- Load Environment Variables ---
 load_dotenv()
@@ -233,15 +234,41 @@ def delete_product(product_id):
 # --- Vending Machine User Interface ---
 @app.route('/vending/<string:machine_identifier>')
 def vending_interface(machine_identifier):
-    # (Keep existing vending interface logic - fetch products, check for pending/awaiting commands)
     try:
-        available_products = Product.query.filter(Product.machine_id == machine_identifier, Product.stock > 0).order_by(Product.motor_id).all()
-    except Exception as e: print(f"Error fetching products for machine {machine_identifier}: {e}"); flash("Error loading products.", "error"); available_products = []
-    pending_command = VendCommand.query.filter_by(vend_id=machine_identifier, status='pending').order_by(VendCommand.created_at.desc()).first()
-    awaiting_payment_command = VendCommand.query.filter_by(vend_id=machine_identifier, status='awaiting_payment').order_by(VendCommand.created_at.desc()).first()
-    return render_template('vending_interface.html', machine_id=machine_identifier, products=available_products, pending_command=pending_command, awaiting_payment_command=awaiting_payment_command)
+        available_products = Product.query.filter(
+                Product.machine_id == machine_identifier,
+                Product.stock > 0
+            ).order_by(Product.motor_id).all()
+    except Exception as e:
+        print(f"Error fetching products for machine {machine_identifier}: {e}")
+        flash("Error loading products for this machine.", "error")
+        available_products = []
 
+    # Fetch potential commands
+    pending_command = VendCommand.query.filter_by(
+        vend_id=machine_identifier,
+        status='pending' # Waiting for ESP pickup
+    ).order_by(VendCommand.created_at.desc()).first()
 
+    awaiting_payment_command = VendCommand.query.filter_by(
+        vend_id=machine_identifier,
+        status='awaiting_payment' # Waiting for user payment
+    ).order_by(VendCommand.created_at.desc()).first()
+
+    # --- Add current time and threshold for display logic ---
+    now_utc = datetime.now(timezone.utc) # Use timezone-aware UTC time
+    # How long to show the "awaiting payment" message before hiding it (e.g., 10 minutes)
+    awaiting_display_threshold = timedelta(minutes=0.25)
+
+    return render_template('vending_interface.html',
+                           machine_id=machine_identifier,
+                           products=available_products,
+                           pending_command=pending_command,
+                           awaiting_payment_command=awaiting_payment_command,
+                           # --- Pass time variables to template ---
+                           current_time_utc=now_utc,
+                           awaiting_threshold=awaiting_display_threshold
+                           )
 # --- Buy Route (REFINED TEMPORARY VERSION - HARDCODED HTTPS LINKS TEST) ---
 @app.route('/buy/<int:product_id>', methods=['POST'])
 def buy_product(product_id):
@@ -298,7 +325,8 @@ def buy_product(product_id):
     # --- Database Operations: MUST complete before redirect decision ---
     new_command_id = None
     try:
-        print(f"[BUY-TEST-DB] Preparing DB update for machine {machine_id} (Product {product_id})...")
+               # Inside the try block of the /buy route:
+        print(f"[BUY-DB] Preparing DB update for machine {machine_id} (Product {product_id})...")
         # 1. Cancel previous awaiting commands for THIS machine
         existing_awaiting_commands = VendCommand.query.filter_by(
             vend_id=machine_id,
@@ -307,23 +335,25 @@ def buy_product(product_id):
 
         cancelled_count = 0
         for cmd in existing_awaiting_commands:
-            print(f"[BUY-TEST-DB] Cancelling previous awaiting command ID {cmd.id}")
-            cmd.status = 'cancelled_by_new_request'
+            # Use a clear status name like 'superseded' or stick with 'cancelled_by_new_request'
+            cancelled_status = 'superseded_by_new_request' # Or 'cancelled_by_new_request'
+            print(f"[BUY-DB] Superseding previous awaiting command ID {cmd.id} with status '{cancelled_status}'")
+            cmd.status = cancelled_status
             cancelled_count += 1
 
-        # 2. Create the new command record
+        # 2. Create the new command record (comes after cancelling old ones)
         new_command = VendCommand(
             vend_id=machine_id, product_id=product.id, motor_id=product.motor_id,
-            status='awaiting_payment' # Set status
+            status='awaiting_payment' # Set status for the new command
         )
         db.session.add(new_command)
-        print(f"[BUY-TEST-DB] Added new VendCommand object (pending commit).")
+        print(f"[BUY-DB] Added new VendCommand object (pending commit).")
 
-        # 3. Commit the transaction
-        print("[BUY-TEST-DB] Attempting db.session.commit()...")
+        # 3. Commit the transaction (Cancellation AND New Command together)
+        print("[BUY-DB] Attempting db.session.commit()...")
         db.session.commit()
         new_command_id = new_command.id # Get ID after commit
-        print(f"[BUY-TEST-DB] COMMIT SUCCESSFUL! New Command ID: {new_command_id}. Cancelled {cancelled_count} previous commands.")
+        print(f"[BUY-DB] COMMIT SUCCESSFUL! New Command ID: {new_command_id}. Superseded {cancelled_count} previous commands.")
 
     except Exception as e:
         db.session.rollback()

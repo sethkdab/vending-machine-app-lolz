@@ -64,22 +64,44 @@
             {% endif %}
         {% endwith %}
 
-        <!-- Status Message Area -->
-        {% if awaiting_payment_command %}
-          <div class="alert alert-info" role="alert">
-            <h4 class="alert-heading">Action Required</h4>
-            <p>You have initiated a purchase for product ID {{ awaiting_payment_command.product_id }} (Motor {{ awaiting_payment_command.motor_id }}). Please complete the payment via your ABA Mobile app as instructed.</p>
-            <hr>
-            <p class="mb-0">The previous payment instructions should still be visible, or you can try buying again to get the details.</p>
-          </div>
-        {% elif pending_command %}
-          <div class="alert alert-success" role="alert">
-             <h4 class="alert-heading">Processing Request</h4>
-             <p>Payment confirmed for product ID {{ pending_command.product_id }} (Motor {{ pending_command.motor_id }}). Your item should be dispensed shortly!</p>
-             <hr>
-             <p class="mb-0">Please wait near the machine.</p>
-          </div>
+        <!-- ############################################# -->
+        <!-- ### MODIFIED STATUS MESSAGE AREA START ### -->
+        <!-- ############################################# -->
+
+        {# --- Define purchase_in_progress variable based on time threshold --- #}
+        {# This requires current_time_utc, awaiting_threshold, timezone passed from Flask route #}
+        {% set is_awaiting_recent = false %} {# Initialize flag #}
+        {% if awaiting_payment_command and current_time_utc and awaiting_threshold and timezone %}
+            {% set time_since_creation = current_time_utc - awaiting_payment_command.created_at.replace(tzinfo=timezone.utc) %}
+            {% if time_since_creation < awaiting_threshold %}
+                {% set is_awaiting_recent = true %}
+            {% endif %}
         {% endif %}
+        {# Determine overall progress state #}
+        {% set purchase_in_progress = (pending_command is not none) or is_awaiting_recent %}
+
+
+        {# --- Display Status Alert --- #}
+        {% if is_awaiting_recent %} {# Only show if the awaiting command is recent #}
+            <div class="alert alert-info" role="alert">
+              <h4 class="alert-heading">Action Required</h4>
+              <p>You initiated a purchase for Slot {{ awaiting_payment_command.motor_id }} about {{ (time_since_creation.total_seconds() / 60) | round(0, 'floor') | int }} minute(s) ago. Please complete the payment via ABA.</p>
+              <hr>
+              <p class="mb-0">If you don't complete the payment soon, this request may expire and you'll need to buy again.</p>
+            </div>
+        {% elif pending_command %} {# Show processing message if payment received, waiting for ESP #}
+            <div class="alert alert-success" role="alert">
+               <h4 class="alert-heading">Processing Request</h4>
+               <p>Payment confirmed for Slot {{ pending_command.motor_id }}. Your item should be dispensed shortly!</p>
+               <hr>
+               <p class="mb-0">Please wait near the machine.</p>
+            </div>
+        {% elif awaiting_payment_command and not is_awaiting_recent %}
+            <!-- An old awaiting_payment command (ID: {{ awaiting_payment_command.id }}) exists but is older than the threshold ({{ awaiting_threshold }}). Not displayed. -->
+        {% endif %}
+        <!-- ########################################### -->
+        <!-- ### MODIFIED STATUS MESSAGE AREA END ### -->
+        <!-- ########################################### -->
 
 
         <h2>Available Products</h2>
@@ -101,13 +123,16 @@
 
                              <!-- The Buy Button Form -->
                              <form method="POST" action="{{ url_for('buy_product', product_id=product.id) }}">
+                                 {# Use the purchase_in_progress variable defined above #}
                                  <button type="submit"
                                          class="btn btn-primary btn-buy"
                                          {% if product.stock <= 0 %}disabled title="Out of Stock"{% endif %}
-                                         {% if awaiting_payment_command or pending_command %}disabled title="Purchase in progress"{% endif %}>
+                                         {# Disable button if stock=0 OR if a recent purchase is in progress #}
+                                         {% if purchase_in_progress %}disabled title="Another purchase is in progress for this machine"{% endif %}>
+                                     {# Adjust button text based on conditions #}
                                      {% if product.stock <= 0 %}
                                          Out of Stock
-                                     {% elif awaiting_payment_command or pending_command %}
+                                     {% elif purchase_in_progress %}
                                          Processing...
                                      {% else %}
                                          Buy Now
